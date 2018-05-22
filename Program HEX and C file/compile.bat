@@ -1,0 +1,1 @@
+sdcc -mmcs51 --std-c99 --fsigned-char 888n.c
