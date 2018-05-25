@@ -7,6 +7,7 @@
 #define __code
 #define __xdata
 #endif
+#define TIMERDEBUG
 
 __xdata volatile uchar display[8][8];
 __xdata volatile uchar time=0;
@@ -75,23 +76,30 @@ __code uchar table_3p[3][8]={
       {0x18,0x3c,0x7e,0xff,0x18,0x18,0x18,0x18}
 };
 
+// T0 timer with same (invalid due to 13 bits) parameters may have been 8,192ms before
+#define T0INIT    TH0 = 0xc0; TL0 = 0x00  // 65.536-16.384 = 49.152 = 0xc000 (16,384ms)
+#define T1INIT    TH1 = 0x3c; TL1 = 0xb0  // 65.536-50.000 = 15.536 = 0x3cb0 (50ms)
+
 /*initializtion
 That is to initialize the program .
 It is write to set the timer in c52 mcu.
 So the program can renovate the led_3d_cube in fixed time use the interrupt function.*/
 void sinter()
 {
-      //IE = 0x82 | 0x8;      // Interrupt enable: 80 EA, 2 ET0, 4 ET1
-      ET0 = 1;
-      ET1 = 1;
-      EA = 1;                 // Interrupt enable
+      EA = 1;                 // General interrupt enable
+      // Timer 0:
+#ifndef TIMERDEBUG            
+      ET0 = 1;                // Interrupt enable
+#endif
       IT0 = 1;                // TCON (Timer control): IT0 edge triggered
-      IT1 = 1;                // TCON (Timer control): IT1 edge triggered
-      TH0 = 0xc0;             // PROBABLY THIS HAS NO EFFECT AS WE ARE IN 13BIT MODE
-      TL0 = 0;
+      TMOD |= T0_M0,          // 16bit timer
+      T0INIT;
       TR0 = 1;                // Timer 0 run enable
-      TH1 = 0x0c;
-      TL1 = 0x78;
+      // Timer 1
+      ET1 = 1;                // Interrupt enable
+      IT1 = 1;                // TCON (Timer control): IT1 edge triggered
+      TMOD |= T1_M0;          // 16bit timer
+      T1INIT;
       TR1 = 1;                // Timer 1 run enable
 }
 
@@ -509,6 +517,12 @@ void transss()
 
       for (i=0;i<8;i++) 
             for (j=0;j<8;j++) display[i][j]<<=1;
+}
+
+// eeprom dumper
+void flash_e()
+{
+      //
 }
 
 void flash_n()
@@ -1117,10 +1131,11 @@ void flash_11()
 }
 
 void main()
-{	
+{
       sinter();
 
 	while (1) {
+#ifndef TIMERDEBUG	
             // clear(0);
             /*play list*/
             //flash_1();
@@ -1148,6 +1163,7 @@ void main()
             flash_8();
             flash_9();
             flash_10();
+#endif 
       }
 }
 
@@ -1173,20 +1189,37 @@ void print() __interrupt (1)
       else 
             layer=0;
 
-      TH0=0xc0;
-      TL0=0;
+      T0INIT;
 }
 
+// Operating hours counter
+// 13 bit mode: 1m/8192 -> 8,192ms/122Hz
+// 9,8304 sec 1200 ticks
+
+// 16 bit mode: 1m/65536 -> 65,536ms/15.25Hz
+// 78,6432ms 1200 ticks
+
+// 65,536 - 50,000 = 15,536 -> 50ms/20Hz
+// 1 sec 20 ticks
+// 1 min 1200 ticks
+// 10 min 12000 tick
+
+// 8192 - 5000 = 5ms/200Hz
+// 1 sec 200 ticks
 void ops_time() __interrupt (3)
 {
       static int ticks=0;     // 2 Bytes
 
-      TH1 = 0x0c;
-      TL1 = 0x78;
+      T1INIT;
       ticks++; 
-      if (ticks >= 200) {
+      if (ticks >= 20) {
             ticks = 0;
             time++;
             // store eeprom
+#ifdef TIMERDEBUG
+            P1 = 1;     // enable layer 1
+            P2 = 0xff;  // latch enable: All latches
+            P0 = (ticks & 0xff) >> 1;     // Shoud see a 10Hz counter
+#endif
       }
 }
