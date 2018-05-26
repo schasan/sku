@@ -3,33 +3,33 @@
 
 #define uchar unsigned char
 #define uint unsigned int
+#define ENABLE_IAP      0x83  // 0x83 for FOSC==12MHz
+#define CMD_IDLE        0     // Stand-By
+#define CMD_READ        1     // Byte-Read
+#define CMD_PROGRAM     2     // Byte-Program
+#define CMD_ERASE       3     // Sector-Erase
 #ifndef SDCC
 #define __code
 #define __xdata
 #endif
-#define TIMERDEBUG
+//#define TIMERDEBUG
 
 __xdata volatile uchar display[8][8];
-__xdata volatile uchar time=0;
+__xdata volatile long ops_time_sec=0;      // ticking in seconds, 
+__xdata volatile int eeaddr;              // pointer in eeprom to store uptime
 
 /*rank:A,1,2,3,4,I,��,U*/
 __code uchar table_cha[8][8] = {
-      {0x51,0x51,0x51,0x4a,0x4a,0x4a,0x44,0x44},
-      {0x18,0x1c,0x18,0x18,0x18,0x18,0x18,0x3c},
-      {0x3c,0x66,0x66,0x30,0x18,0x0c,0x06,0xf6},
-      {0x3c,0x66,0x60,0x38,0x60,0x60,0x66,0x3c},
-      {0x30,0x38,0x3c,0x3e,0x36,0x7e,0x30,0x30},
-      {0x3c,0x3c,0x18,0x18,0x18,0x18,0x3c,0x3c},
-      {0x66,0xff,0xff,0xff,0x7e,0x3c,0x18,0x18},
-      {0x66,0x66,0x66,0x66,0x66,0x66,0x7e,0x3c}
+      {0x51,0x51,0x51,0x4a,0x4a,0x4a,0x44,0x44}, {0x18,0x1c,0x18,0x18,0x18,0x18,0x18,0x3c},
+      {0x3c,0x66,0x66,0x30,0x18,0x0c,0x06,0xf6}, {0x3c,0x66,0x60,0x38,0x60,0x60,0x66,0x3c},
+      {0x30,0x38,0x3c,0x3e,0x36,0x7e,0x30,0x30}, {0x3c,0x3c,0x18,0x18,0x18,0x18,0x3c,0x3c},
+      {0x66,0xff,0xff,0xff,0x7e,0x3c,0x18,0x18}, {0x66,0x66,0x66,0x66,0x66,0x66,0x7e,0x3c}
 };
 
 /*the "ideasoft"*/
 __code uchar table_id[40] = {
-      0x81,0xff,0x81,0x00,0xff,0x81,0x81,0x7e,0x00,0xff,
-      0x89,0x89,0x00,0xf8,0x27,0x27,0xf8,0x00,0x8f,0x89,
-      0x89,0xf9,0x00,0xff,0x81,0x81,0xff,0x00,0xff,0x09,
-      0x09,0x09,0x01,0x00,0x01,0x01,0xff,0x01,0x01,0x00
+      0x81,0xff,0x81,0x00,0xff,0x81,0x81,0x7e,0x00,0xff, 0x89,0x89,0x00,0xf8,0x27,0x27,0xf8,0x00,0x8f,0x89,
+      0x89,0xf9,0x00,0xff,0x81,0x81,0xff,0x00,0xff,0x09, 0x09,0x09,0x01,0x00,0x01,0x01,0xff,0x01,0x01,0x00
 };
 
 /*railway*/
@@ -71,14 +71,12 @@ __code uchar dat3[24]={0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x16,0x26,0x36,0x46,0x
 
 /*3p char*/
 __code uchar table_3p[3][8]={
-      {0xff,0x89,0xf5,0x93,0x93,0xf5,0x89,0xff},
-      {0x0e,0x1f,0x3f,0x7e,0x7e,0x3f,0x1f,0x0e},
-      {0x18,0x3c,0x7e,0xff,0x18,0x18,0x18,0x18}
+      {0xff,0x89,0xf5,0x93,0x93,0xf5,0x89,0xff}, {0x0e,0x1f,0x3f,0x7e,0x7e,0x3f,0x1f,0x0e}, {0x18,0x3c,0x7e,0xff,0x18,0x18,0x18,0x18}
 };
 
 // T0 timer with same (invalid due to 13 bits) parameters may have been 8,192ms before
-#define T0INIT    TH0 = 0xc0; TL0 = 0x00  // 65.536-16.384 = 49.152 = 0xc000 (16,384ms)
-#define T1INIT    TH1 = 0x3c; TL1 = 0xb0  // 65.536-50.000 = 15.536 = 0x3cb0 (50ms)
+#define T0INIT    TH0 = 0x3c; TL0 = 0xb0  // 65.536-50.000 = 15.536 = 50ms
+#define T1INIT    TH1 = 0xfc; TL1 = 0x18  // 65.536- 1.000 = 1ms
 
 /*initializtion
 That is to initialize the program .
@@ -86,11 +84,12 @@ It is write to set the timer in c52 mcu.
 So the program can renovate the led_3d_cube in fixed time use the interrupt function.*/
 void sinter()
 {
+      uchar i;
+      long lasttime=0;
+
+      //P0M0 = 0xff;
       EA = 1;                 // General interrupt enable
-      // Timer 0:
-#ifndef TIMERDEBUG            
-      ET0 = 1;                // Interrupt enable
-#endif
+      // Timer 0: Uptime
       IT0 = 1;                // TCON (Timer control): IT0 edge triggered
       TMOD |= T0_M0,          // 16bit timer
       T0INIT;
@@ -101,22 +100,55 @@ void sinter()
       TMOD |= T1_M0;          // 16bit timer
       T1INIT;
       TR1 = 1;                // Timer 1 run enable
+#ifdef TIMERDEBUG
+      //P0M0 = 0xff;
+#endif
+      // find last uptime from user eeprom
+      IAP_CONTR = ENABLE_IAP;
+      IAP_CMD = CMD_READ;
+
+      do {
+            long gettime = 0;
+            for (i=0; i<4; i++) {
+                  long eetime=0;
+
+                  IAP_ADDRL = eeaddr+i;
+                  IAP_ADDRH = (eeaddr+i) >> 8;
+                  IAP_TRIG = 0x5a;
+                  IAP_TRIG = 0xa5;
+                  __asm__ ("nop");
+                  __asm__ ("nop");
+                  eetime = IAP_DATA;
+                  eetime <<= (8*i);
+                  gettime |= eetime;
+            }
+            if (gettime == 0xffffffff)  {       // Current address has an empty record
+                  ops_time_sec = lasttime;
+                  IAP_CONTR = 0;
+                  IAP_CMD = 0;
+                  IAP_TRIG = 0;
+                  break;
+            } else {
+                  eeaddr += 4;
+                  lasttime = gettime;
+            }
+      } while (1);
+      // Enable time counter once initialized from eeprom
+#ifndef TIMERDEBUG            
+      ET0 = 1;                // Interrupt enable
+#endif
 }
 
 void delay5us(void)   // -0.026765046296us STC 1T 22.1184Mhz
 {
       uchar a, b;
       
-      for(b=7;b>0;b--)
-            for(a=2;a>0;a--);
+      for (b=7; b>0; b--) for (a=2; a>0; a--);
 }
 
 void delay(uint i)
 {                                                                                                     
-
-      while (i--) {
-		delay5us();
-      } //12t mcu
+      while (i--) delay5us(); //12t mcu
 }
 
 /*To judge the num bit*/
@@ -520,12 +552,64 @@ void transss()
 }
 
 // eeprom dumper
+// ERROR: has to care about nibbles
 void flash_e()
 {
-      //
+      int i;
+
+      IAP_CONTR = ENABLE_IAP;
+      IAP_CMD = CMD_READ;
+
+      for (i=0; i<32; i++) {
+            IAP_ADDRL = i;
+            IAP_ADDRH = i >> 8;
+            IAP_TRIG = 0x5a;
+            IAP_TRIG = 0xa5;
+            __asm__ ("nop");
+            __asm__ ("nop");
+            type_number(IAP_DATA, 7);
+            type_number(i, 0);
+            type_number(i>>8, 3);
+            delay(60000);
+            clear(0);
+            delay(10000);
+      }
+      IAP_CONTR = 0;
+      IAP_CMD = 0;
+      IAP_TRIG = 0;
 }
 
-void flash_n()
+// eeprom address dump
+void flash_a()
+{
+      int i;
+
+      for (i=0; i<3*4; i+=4) {      // addr should range 2048, which is 2 nibbles
+            type_number(eeaddr >> i, 0);
+            delay(60000);
+            clear(0);
+            delay(10000);
+      }
+      delay(50000);
+}
+
+// ops timer snapshot dump
+void flash_o()
+{
+      int i;
+      long disp;
+
+      disp = ops_time_sec;          // snapshot, is under interrupt control
+      for (i=0; i<8*4; i+=4) {      // long is 4 bytes, 8 nibbles
+            type_number(disp >> i, 0);
+            delay(60000);
+            clear(0);
+            delay(10000);      
+      }
+}
+
+// Just count, two vLayers
+void flash_c()
 {
       uchar i, j;
 
@@ -536,11 +620,17 @@ void flash_n()
             }
             delay(60000);
       }
+}
 
+// Hex live display of timer
+void flash_i()
+{
+      uchar i, j;
+
+      clear(0);
       for (i=0; i<200; i++) {
-            for (j=0; j<4;j++) {
-                  type_number(time, j);
-            }
+            for (j=0; j<4; j++) type_number(ops_time_sec, j);
+            for (j=4; j<8; j++) type_number(ops_time_sec >> 4, j);
             delay(10000);
       }
       clear(0);
@@ -1135,14 +1225,19 @@ void main()
       sinter();
 
 	while (1) {
-#ifndef TIMERDEBUG	
+#ifndef TIMERDEBUG
             // clear(0);
             /*play list*/
             //flash_1();
 
             clear(0);
-            flash_n();
+            //flash_n();      // Counter
+            //flash_i();      // Interrupt live time display
+            //flash_e();        // ERROR: nibble aware! eeprom dumper
+            flash_a();      // eeprom address display
+            flash_o();        // Display snapshot of operating time
             flash_2();
+#ifdef INOP
             flash_3();
             flash_4();
             flash_4();
@@ -1163,14 +1258,15 @@ void main()
             flash_8();
             flash_9();
             flash_10();
-#endif 
+#endif INOP
+#endif TIMERDEBUG
       }
 }
 
 //P0;   //573 in
 //P1;  //uln2803
 //P2;  //573 LE
-void print() __interrupt (1)
+void print() __interrupt (3)
 {
       uchar i;
       static uchar layer=0;
@@ -1189,7 +1285,7 @@ void print() __interrupt (1)
       else 
             layer=0;
 
-      T0INIT;
+      T1INIT;
 }
 
 // Operating hours counter
@@ -1206,20 +1302,26 @@ void print() __interrupt (1)
 
 // 8192 - 5000 = 5ms/200Hz
 // 1 sec 200 ticks
-void ops_time() __interrupt (3)
+void ops_time() __interrupt (1)
 {
       static int ticks=0;     // 2 Bytes
+      static uchar toggle=0;
+      static uchar layer=1;
 
-      T1INIT;
+      T0INIT;
       ticks++; 
       if (ticks >= 20) {
+            toggle = ~toggle;
             ticks = 0;
-            time++;
+            ops_time_sec++;
             // store eeprom
 #ifdef TIMERDEBUG
-            P1 = 1;     // enable layer 1
-            P2 = 0xff;  // latch enable: All latches
-            P0 = (ticks & 0xff) >> 1;     // Shoud see a 10Hz counter
+            P1 = layer;
+            layer <<= 1:
+            if (layer == 0) layer++;
+            P2 = 1;  // latch enable: All latches
+            //P0 = (ticks & 0xff) >> 1;     // Shoud see a 10Hz counter
+            P0 = toggle;
 #endif
       }
 }
