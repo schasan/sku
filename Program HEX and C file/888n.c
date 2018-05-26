@@ -11,12 +11,14 @@
 #ifndef SDCC
 #define __code
 #define __xdata
+#define __bit
 #endif
 //#define TIMERDEBUG
 
 __xdata volatile uchar display[8][8];
-__xdata volatile long ops_time_sec=0;      // ticking in seconds, 
+__xdata volatile long ops_time_sec=0;     // ticking in seconds, 
 __xdata volatile int eeaddr;              // pointer in eeprom to store uptime
+__bit ops_time_write = 0;                     // signal from interrupt to write ops time
 
 /*rank:A,1,2,3,4,I,��,U*/
 __code uchar table_cha[8][8] = {
@@ -137,6 +139,27 @@ void sinter()
 #ifndef TIMERDEBUG            
       ET0 = 1;                // Interrupt enable
 #endif
+}
+
+void storetime()
+{
+      uchar i;
+
+      IAP_CONTR = ENABLE_IAP;
+      IAP_CMD = CMD_PROGRAM;
+      for (i=0; i<4*8; i+=8) {
+            IAP_ADDRL = eeaddr;
+            IAP_ADDRH = eeaddr >> 8;
+            IAP_DATA = ops_time_sec >> i;
+            IAP_TRIG = 0x5a;
+            IAP_TRIG = 0xa5;
+            __asm__ ("nop");
+            __asm__ ("nop");
+            eeaddr++;
+      }
+      IAP_CONTR = 0;
+      IAP_CMD = 0;
+      IAP_TRIG = 0;
 }
 
 void delay5us(void)   // -0.026765046296us STC 1T 22.1184Mhz
@@ -552,7 +575,6 @@ void transss()
 }
 
 // eeprom dumper
-// ERROR: has to care about nibbles
 void flash_e()
 {
       int i;
@@ -567,9 +589,10 @@ void flash_e()
             IAP_TRIG = 0xa5;
             __asm__ ("nop");
             __asm__ ("nop");
-            type_number(IAP_DATA, 7);
+            type_number(IAP_DATA, 6);
+            type_number(IAP_DATA>>4, 4);
             type_number(i, 0);
-            type_number(i>>8, 3);
+            type_number(i>>4, 2);
             delay(60000);
             clear(0);
             delay(10000);
@@ -1233,9 +1256,13 @@ void main()
             clear(0);
             //flash_n();      // Counter
             //flash_i();      // Interrupt live time display
-            //flash_e();        // ERROR: nibble aware! eeprom dumper
-            flash_a();      // eeprom address display
+            flash_e();        // eeprom dumper
+            flash_a();        // eeprom address display
             flash_o();        // Display snapshot of operating time
+            if (ops_time_write) {
+                  ops_time_write = 0;
+                  storetime();
+            }
             flash_2();
 #ifdef INOP
             flash_3();
@@ -1304,17 +1331,21 @@ void print() __interrupt (3)
 // 1 sec 200 ticks
 void ops_time() __interrupt (1)
 {
-      static int ticks=0;     // 2 Bytes
+      static int ticks=0, seconds=0;     // 2 Bytes
       static uchar toggle=0;
       static uchar layer=1;
 
       T0INIT;
       ticks++; 
-      if (ticks >= 20) {
+      if (ticks >= 20) {      // One second
             toggle = ~toggle;
             ticks = 0;
             ops_time_sec++;
-            // store eeprom
+            seconds++;
+            if (seconds > 600) {
+                  ops_time_write = 1;
+                  seconds = 0;
+            }
 #ifdef TIMERDEBUG
             P1 = layer;
             layer <<= 1:
