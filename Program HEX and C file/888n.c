@@ -16,9 +16,9 @@
 //#define TIMERDEBUG
 
 __xdata volatile uchar display[8][8];
-__xdata volatile long ops_time_sec=0;     // ticking in seconds, 
-__xdata volatile int eeaddr;              // pointer in eeprom to store uptime
-__bit ops_time_write = 0;                     // signal from interrupt to write ops time
+__xdata volatile unsigned long ops_time_sec=0;  // ticking in seconds, ~=136 years
+__xdata volatile int eeaddr;                    // pointer in eeprom to store uptime
+__bit ops_time_write = 0;                       // signal from interrupt to write ops time
 
 /*rank:A,1,2,3,4,I,��,U*/
 __code uchar table_cha[8][8] = {
@@ -589,8 +589,8 @@ void flash_e()
             IAP_TRIG = 0xa5;
             __asm__ ("nop");
             __asm__ ("nop");
-            type_number(IAP_DATA, 6);
-            type_number(IAP_DATA>>4, 4);
+            type_number(IAP_DATA, 7);
+            type_number(IAP_DATA>>4, 5);
             type_number(i, 0);
             type_number(i>>4, 2);
             delay(60000);
@@ -1332,13 +1332,17 @@ void print() __interrupt (3)
 void ops_time() __interrupt (1)
 {
       static int ticks=0, seconds=0;     // 2 Bytes
+#ifdef TIMERDEBUG
       static uchar toggle=0;
+#endif
       static uchar layer=1;
 
       T0INIT;
       ticks++; 
       if (ticks >= 20) {      // One second
+#ifdef TIMERDEBUG
             toggle = ~toggle;
+#endif
             ticks = 0;
             ops_time_sec++;
             seconds++;
