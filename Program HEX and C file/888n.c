@@ -19,7 +19,7 @@
 
 __xdata volatile uchar display[8][8];
 __xdata volatile unsigned long ops_time_sec=0;  // ticking in seconds, ~=136 years
-__xdata volatile int eeaddr;                    // pointer in eeprom to store uptime
+__xdata volatile int eeaddr=0;                  // pointer in eeprom to store uptime
 __bit ops_time_write = 0;                       // signal from interrupt to write ops time
 
 /*rank:A,1,2,3,4,I,��,U*/
@@ -71,7 +71,6 @@ So the program can renovate the led_3d_cube in fixed time use the interrupt func
 void sinter()
 {
       uchar i;
-      long lasttime=0;
 
       //P0M0 = 0xff;
       EA = 1;                 // General interrupt enable
@@ -93,30 +92,25 @@ void sinter()
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_READ;
 
+      // ops_time_sec is zero through declaration
       do {
-            long gettime = 0;
+            long eetime=0;      // no need to initialize, all data shifted left
             for (i=0; i<4; i++) {
-                  long eetime=0;
-
-                  IAP_ADDRL = eeaddr+i;
+                  IAP_ADDRL = (eeaddr+i);
                   IAP_ADDRH = (eeaddr+i) >> 8;
                   IAP_TRIG = 0x5a;
                   IAP_TRIG = 0xa5;
-                  __asm__ ("nop");
-                  __asm__ ("nop");
-                  eetime = IAP_DATA;
-                  eetime <<= (8*i);
-                  gettime |= eetime;
+                  __asm__ ("nop");              // Hold here until operation conplete
+                  ((uchar *)(&eetime))[i] = IAP_DATA;
             }
-            if (gettime == 0xffffffff)  {       // Current address has an empty record
-                  ops_time_sec = lasttime;
+            if (eetime == 0xffffffff)  {       // Current address has an empty record
                   IAP_CONTR = 0;
                   IAP_CMD = 0;
                   IAP_TRIG = 0;
                   break;
             } else {
                   eeaddr += 4;
-                  lasttime = gettime;
+                  ops_time_sec = eetime;
             }
       } while (1);
       // Enable time counter once initialized from eeprom
@@ -131,16 +125,29 @@ void storetime()
 
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_PROGRAM;
-      for (i=0; i<4*8; i+=8) {
+      for (i=0; i<4; i++) {
             IAP_ADDRL = eeaddr;
             IAP_ADDRH = eeaddr >> 8;
-            IAP_DATA = ops_time_sec >> i;
+            IAP_DATA = ((uchar *)(&ops_time_sec))[i];
             IAP_TRIG = 0x5a;
             IAP_TRIG = 0xa5;
-            __asm__ ("nop");
-            __asm__ ("nop");
+            __asm__ ("nop");              // Hold here until operation conplete
             eeaddr++;
       }
+      IAP_CONTR = 0;
+      IAP_CMD = 0;
+      IAP_TRIG = 0;
+}
+
+void erase_sector(int addr)
+{
+      IAP_CONTR = ENABLE_IAP;
+      IAP_CMD = CMD_ERASE;
+      IAP_ADDRL = addr;
+      IAP_ADDRH = addr >> 8;
+      IAP_TRIG = 0x5a;
+      IAP_TRIG = 0xa5;
+      __asm__ ("nop");                    // Hold here until operation conplete
       IAP_CONTR = 0;
       IAP_CMD = 0;
       IAP_TRIG = 0;
@@ -571,8 +578,7 @@ void flash_e()
             IAP_ADDRH = i >> 8;
             IAP_TRIG = 0x5a;
             IAP_TRIG = 0xa5;
-            __asm__ ("nop");
-            __asm__ ("nop");
+            __asm__ ("nop");        // Hold here until operation conplete
             type_number(IAP_DATA, 7);
             type_number(IAP_DATA>>4, 5);
             type_number(i, 0);
