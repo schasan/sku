@@ -16,6 +16,13 @@
 
 #include "888n.h"
 
+//Ringbuffer transmit code is not working!
+//#define RB              256   // Cannot easily be changed, using uchar for modulo
+#ifdef RB
+#define RB_MOD (RB-1)
+__xdata volatile uchar tx[RB];
+__xdata volatile uchar tx_act=0, tx_ptr_w=0, tx_ptr_r=0;
+#endif
 __xdata volatile uchar display[8][8];
 __xdata volatile unsigned long ops_time_sec = 0L;     // ticking in seconds, ~=136 years
 __xdata volatile int ee_addr = 0;                     // pointer in eeprom to store uptime
@@ -126,10 +133,25 @@ void sinter()
 // send a byte via uart (returns -1 if TX buffer full, otherwise 0 on success) [non blocking]
 int send_uart(uchar dat)
 {
+#ifdef RB
+      EA = 0;
+      if (tx_act > 254) {
+            EA = 1;
+            return 1;
+      }
+      else {
+            tx_act++;
+            tx[tx_ptr_w++] = dat;
+            if (TI == 0) TI = 1;    // probably may not raise an interrupt here.
+            EA = 1;
+            return 0;
+      }
+#else
       while (serial_busy) __asm__ ("nop");
       serial_busy = 1;
       SBUF = dat;
       return 0;
+#endif
 }
 
 ///////////////////////////////////////////////////////////
@@ -1309,17 +1331,21 @@ void main()
 
             clear(0);
             send_str("\015\012Hello Mario\015\012");
+#ifdef DISPLAY_DEBUG_ON_CUBE
             //flash_n();      // Counter
             //flash_i();      // Interrupt live time display
             flash_e();        // eeprom dumper
             flash_a();        // eeprom address display
             flash_o();        // Display snapshot of operating time
-            if (ops_time_write) {
+#endif
+            if (ops_time_write) {   // Interrupt routing says we have to update ops time in eeprom
+                  send_str("EEPROM update\015\012");
                   ops_time_write = 0;
                   storetime();
             }
             flash_2();
-#ifdef INOP
+#define NORMAL_CYCLE
+#ifdef NORMAL_CYCLE      // For debugging timer
             flash_3();
             flash_4();
             flash_4();
@@ -1419,13 +1445,12 @@ void uart_isr() __interrupt (4)
                   rx_in++;
             } */
       } else if (TI) { // byte was sent
-#ifdef inop
+#ifdef RB
             TI = 0; // Clear transmit interrupt flag
 
-            if (tx_out > 0) {
-                  SBUF = tx_buffer[tx_read];    // SBUF operation triggers shift out 
-                  tx_read = (tx_read+1)%MAX_BUFFER;
-                  tx_out--;
+            if (tx_act > 0) {
+                  SBUF = tx[tx_ptr_r++];    // SBUF operation triggers shift out
+                  tx_act--;
             }
 #else
             TI = 0;
