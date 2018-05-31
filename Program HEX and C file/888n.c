@@ -18,9 +18,23 @@
 #include "888n.h"
 
 __xdata volatile uchar display[8][8];
-__xdata volatile unsigned long ops_time_sec=0;  // ticking in seconds, ~=136 years
-__xdata volatile int eeaddr=0;                  // pointer in eeprom to store uptime
-__bit ops_time_write = 0;                       // signal from interrupt to write ops time
+__xdata volatile unsigned long ops_time_sec = 0L;     // ticking in seconds, ~=136 years
+__xdata volatile int ee_addr = 0;                     // pointer in eeprom to store uptime
+__bit ops_time_write = 0;                             // signal from interrupt to write ops time
+__bit serial_busy = 0;
+
+#define MAX_BUFFER  128                               // UART ring buffer size
+
+/*
+__xdata volatile uchar rx_buffer[MAX_BUFFER];
+__xdata volatile int rx_read = 0;
+__xdata volatile int rx_write = 0;
+__xdata volatile int rx_in = 0;
+__xdata volatile uchar tx_buffer[MAX_BUFFER];
+__xdata volatile int tx_read = 0;
+__xdata volatile int tx_write = 0;
+__xdata volatile int tx_out = 0;
+*/
 
 /*rank:A,1,2,3,4,I,��,U*/
 __code uchar table_cha[8][8] = {
@@ -88,35 +102,106 @@ void sinter()
 #ifdef TIMERDEBUG
       //P0M0 = 0xff;
 #endif
+      // Initialize UART - 9600bps @ 12MHz
+      PCON &= 0x7f;           // No doubled baudrate, SMOD=0
+      SCON =  0x50;           // 8bit and variable baudrate, 1 stopbit, no parity, mode 1
+      AUXR |= 0x04;           // BRT's clock is Fosc (1T)
+      BRT  =  0xD9;           // Set BRT's reload value = 9615 baud
+      AUXR |= 0x01;           // Use BRT as baudrate generator
+      AUXR |= 0x10;           // BRT running
+      ES   =  1;              // Enable UART interrupt
+
       // find last uptime from user eeprom
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_READ;
 
       // ops_time_sec is zero through declaration
       do {
-            long eetime=0;      // no need to initialize, all data shifted left
+            unsigned long ee_time=0L;      // no need to initialize, all data shifted left
             for (i=0; i<4; i++) {
-                  IAP_ADDRL = (eeaddr+i);
-                  IAP_ADDRH = (eeaddr+i) >> 8;
+                  IAP_ADDRL = (ee_addr+i);
+                  IAP_ADDRH = (ee_addr+i) >> 8;
                   IAP_TRIG = 0x5a;
                   IAP_TRIG = 0xa5;
                   __asm__ ("nop");              // Hold here until operation conplete
-                  ((uchar *)(&eetime))[i] = IAP_DATA;
+                  ((uchar *)(&ee_time))[i] = IAP_DATA;
             }
-            if (eetime == 0xffffffff)  {       // Current address has an empty record
+            if (ee_time == 0xffffffff)  {       // Current address has an empty record
                   IAP_CONTR = 0;
                   IAP_CMD = 0;
                   IAP_TRIG = 0;
                   break;
             } else {
-                  eeaddr += 4;
-                  ops_time_sec = eetime;
+                  ee_addr += 4;
+                  ops_time_sec = ee_time;
             }
       } while (1);
       // Enable time counter once initialized from eeprom
 #ifndef TIMERDEBUG            
       ET0 = 1;                // Interrupt enable
 #endif
+}
+
+// send a byte via uart (returns -1 if TX buffer full, otherwise 0 on success) [non blocking]
+int send_uart(uchar dat)
+{
+#ifdef inop
+      int res;
+
+      EA = 0;
+
+      if (tx_read == tx_write && tx_out > 0) {  // buffer is full
+            res = -1;
+      } else {
+            tx_buffer[tx_write] = dat;
+            tx_write = (tx_write+1)%MAX_BUFFER;
+            tx_out++;
+            res = 0;
+
+            if (TI == 0) TI = 1;                // instruct to run interrupt & send the data
+      }
+
+      EA = 1;
+      return res;
+#else
+      while (serial_busy) __asm__ ("nop");
+      serial_busy = 1;
+      SBUF = dat;
+      return 0;
+#endif
+}
+
+///////////////////////////////////////////////////////////
+//  send a string via uart [is blocking]
+void send_str(char* s)
+{
+      while (*s) while (send_uart(*s++) != 0) __asm__("nop");
+}
+
+///////////////////////////////////////////////////////////
+// send a byte via uart [is blocking]
+void send_serial(uchar dat) 
+{
+      while (send_uart(dat) != 0) __asm__("nop");
+}
+
+void send_hex(uchar dat)
+{
+      uchar nibble;
+
+      nibble = (dat >> 4) & 0xf;            // high nibble
+      if (nibble < 10)
+            nibble += 0x30;
+      else
+            nibble += 0x61-10;
+      send_serial(nibble);
+
+      nibble = dat & 0xf;           // low nibble
+      if (nibble < 10)
+            nibble += 0x30;
+      else
+            nibble += 0x61-10;
+      send_serial(nibble);
 }
 
 void storetime()
@@ -126,13 +211,13 @@ void storetime()
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_PROGRAM;
       for (i=0; i<4; i++) {
-            IAP_ADDRL = eeaddr;
-            IAP_ADDRH = eeaddr >> 8;
+            IAP_ADDRL = ee_addr;
+            IAP_ADDRH = ee_addr >> 8;
             IAP_DATA = ((uchar *)(&ops_time_sec))[i];
             IAP_TRIG = 0x5a;
             IAP_TRIG = 0xa5;
             __asm__ ("nop");              // Hold here until operation conplete
-            eeaddr++;
+            ee_addr++;
       }
       IAP_CONTR = 0;
       IAP_CMD = 0;
@@ -573,12 +658,19 @@ void flash_e()
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_READ;
 
-      for (i=0; i<32; i++) {
+      send_str("\015\012EEPROM:");
+
+      for (i=0; i<512; i++) {
+            if (i%(8*4) == 0)
+                  send_str("\015\012");
+            else if (i%4 == 0)
+                  send_serial(' ');
             IAP_ADDRL = i;
             IAP_ADDRH = i >> 8;
             IAP_TRIG = 0x5a;
             IAP_TRIG = 0xa5;
             __asm__ ("nop");        // Hold here until operation conplete
+#ifdef eepromdisplay
             type_number(IAP_DATA, 7);
             type_number(IAP_DATA>>4, 5);
             type_number(i, 0);
@@ -586,10 +678,13 @@ void flash_e()
             delay(60000);
             clear(0);
             delay(10000);
+#endif
+            send_hex(IAP_DATA);
       }
       IAP_CONTR = 0;
       IAP_CMD = 0;
       IAP_TRIG = 0;
+      send_serial(' ');
 }
 
 // eeprom address dump
@@ -597,8 +692,13 @@ void flash_a()
 {
       int i;
 
-      for (i=0; i<3*4; i+=4) {      // addr should range 2048, which is 2 nibbles
-            type_number(eeaddr >> i, 0);
+      send_str("\015\012Address: ");
+
+      send_hex(((uchar *)(&ee_addr))[0]);
+      send_hex(((uchar *)(&ee_addr))[1]);
+
+      for (i=0; i<3*4; i+=4) {      // addr should range 2048, which is 3 nibbles
+            type_number(ee_addr >> i, 0);
             delay(60000);
             clear(0);
             delay(10000);
@@ -613,6 +713,10 @@ void flash_o()
       long disp;
 
       disp = ops_time_sec;          // snapshot, is under interrupt control
+
+      send_str("\015\012Timer: ");
+      for (i=0; i<4; i++) send_hex(((uchar *)(&disp))[i]);
+
       for (i=0; i<8*4; i+=4) {      // long is 4 bytes, 8 nibbles
             type_number(disp >> i, 0);
             delay(60000);
@@ -1244,6 +1348,7 @@ void main()
             //flash_1();
 
             clear(0);
+            send_str("\015\012Hello Mario\015\012");
             //flash_n();      // Counter
             //flash_i();      // Interrupt live time display
             flash_e();        // eeprom dumper
@@ -1349,4 +1454,39 @@ void ops_time() __interrupt (1)
             P0 = toggle;
 #endif
       }
+}
+
+///////////////////////////////////////////////////////////
+// interrupt driven uart with ring buffer
+void uart_isr() __interrupt (4)
+{
+      uchar ignore;
+
+      EA = 0;
+
+      if (RI) { // received a byte
+            RI = 0; // Clear receive interrupt flag
+            ignore = SBUF;
+            /* Ignore incoming 
+            if (!(rx_write == rx_read && rx_in > 0)) {
+                  rx_buffer[rx_write] = SBUF;
+                  rx_write = (rx_write+1)%MAX_BUFFER;
+                  rx_in++;
+            } */
+      } else if (TI) { // byte was sent
+#ifdef inop
+            TI = 0; // Clear transmit interrupt flag
+
+            if (tx_out > 0) {
+                  SBUF = tx_buffer[tx_read];    // SBUF operation triggers shift out 
+                  tx_read = (tx_read+1)%MAX_BUFFER;
+                  tx_out--;
+            }
+#else
+            TI = 0;
+            serial_busy = 0;
+#endif
+      }
+
+      EA = 1;
 }
