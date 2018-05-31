@@ -634,7 +634,7 @@ void transss()
 }
 
 // eeprom dumper
-void flash_e()
+void flash_e(uchar on_cube)
 {
       int i;
 
@@ -643,7 +643,7 @@ void flash_e()
 
       send_str("\015\012EEPROM:");
 
-      for (i=511; i>=0; i--) {
+      for (i=(1024-1); i>=0; i--) {
             if ((i+1)%(8*4) == 0)
                   send_str("\015\012");
             else if ((i+1)%4 == 0)
@@ -653,15 +653,15 @@ void flash_e()
             IAP_TRIG = 0x5a;
             IAP_TRIG = 0xa5;
             __asm__ ("nop");        // Hold here until operation conplete
-#ifdef eepromdisplay
-            type_number(IAP_DATA, 7);
-            type_number(IAP_DATA>>4, 5);
-            type_number(i, 0);
-            type_number(i>>4, 2);
-            delay(60000);
-            clear(0);
-            delay(10000);
-#endif
+            if (on_cube) {
+                  type_number(IAP_DATA, 7);
+                  type_number(IAP_DATA>>4, 5);
+                  type_number(i, 0);
+                  type_number(i>>4, 2);
+                  delay(60000);
+                  clear(0);
+                  delay(10000);
+            }
             send_hex(IAP_DATA);
       }
       IAP_CONTR = 0;
@@ -671,7 +671,7 @@ void flash_e()
 }
 
 // eeprom address dump
-void flash_a()
+void flash_a(uchar on_cube)
 {
       short i;
 
@@ -679,18 +679,19 @@ void flash_a()
 
       send_hex(((uchar *)(&ee_addr))[1]);
       send_hex(((uchar *)(&ee_addr))[0]);
-
-      for (i=0; i<3*4; i+=4) {      // addr should range 2048, which is 3 nibbles
-            type_number(ee_addr >> i, 0);
-            delay(60000);
-            clear(0);
-            delay(10000);
+      if (on_cube) {
+            for (i=0; i<3*4; i+=4) {      // addr should range 2048, which is 3 nibbles
+                  type_number(ee_addr >> i, 0);
+                  delay(60000);
+                  clear(0);
+                  delay(10000);
+            }
+            delay(50000);
       }
-      delay(50000);
 }
 
 // ops timer snapshot dump
-void flash_o()
+void flash_o(uchar on_cube)
 {
       short i;
       long disp;
@@ -700,11 +701,13 @@ void flash_o()
       send_str("\015\012Timer: ");
       for (i=3; i>=0; i--) send_hex(((uchar *)(&disp))[i]);
 
-      for (i=0; i<8*4; i+=4) {      // long is 4 bytes, 8 nibbles
-            type_number(disp >> i, 0);
-            delay(60000);
-            clear(0);
-            delay(10000);      
+      if (on_cube) {
+            for (i=0; i<8*4; i+=4) {      // long is 4 bytes, 8 nibbles
+                  type_number(disp >> i, 0);
+                  delay(60000);
+                  clear(0);
+                  delay(10000);      
+            }
       }
 }
 
@@ -1331,13 +1334,11 @@ void main()
 
             clear(0);
             send_str("\015\012Hello Mario\015\012");
-#ifdef DISPLAY_DEBUG_ON_CUBE
             //flash_n();      // Counter
             //flash_i();      // Interrupt live time display
-            flash_e();        // eeprom dumper
-            flash_a();        // eeprom address display
-            flash_o();        // Display snapshot of operating time
-#endif
+            flash_e(0);        // eeprom dumper
+            flash_a(0);        // eeprom address display
+            flash_o(0);        // Display snapshot of operating time
             if (ops_time_write) {   // Interrupt routing says we have to update ops time in eeprom
                   send_str("EEPROM update\015\012");
                   ops_time_write = 0;
