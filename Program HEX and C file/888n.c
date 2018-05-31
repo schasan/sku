@@ -13,7 +13,6 @@
 #define __xdata
 #define __bit
 #endif
-//#define TIMERDEBUG
 
 #include "888n.h"
 
@@ -22,19 +21,6 @@ __xdata volatile unsigned long ops_time_sec = 0L;     // ticking in seconds, ~=1
 __xdata volatile int ee_addr = 0;                     // pointer in eeprom to store uptime
 __bit ops_time_write = 0;                             // signal from interrupt to write ops time
 __bit serial_busy = 0;
-
-#define MAX_BUFFER  128                               // UART ring buffer size
-
-/*
-__xdata volatile uchar rx_buffer[MAX_BUFFER];
-__xdata volatile int rx_read = 0;
-__xdata volatile int rx_write = 0;
-__xdata volatile int rx_in = 0;
-__xdata volatile uchar tx_buffer[MAX_BUFFER];
-__xdata volatile int tx_read = 0;
-__xdata volatile int tx_write = 0;
-__xdata volatile int tx_out = 0;
-*/
 
 /*rank:A,1,2,3,4,I,��,U*/
 __code uchar table_cha[8][8] = {
@@ -99,9 +85,6 @@ void sinter()
       TMOD |= T1_M0;          // 16bit timer
       T1INIT;
       TR1 = 1;                // Timer 1 run enable
-#ifdef TIMERDEBUG
-      //P0M0 = 0xff;
-#endif
       // Initialize UART - 9600bps @ 12MHz
       PCON &= 0x7f;           // No doubled baudrate, SMOD=0
       SCON =  0x50;           // 8bit and variable baudrate, 1 stopbit, no parity, mode 1
@@ -137,38 +120,16 @@ void sinter()
             }
       } while (1);
       // Enable time counter once initialized from eeprom
-#ifndef TIMERDEBUG            
       ET0 = 1;                // Interrupt enable
-#endif
 }
 
 // send a byte via uart (returns -1 if TX buffer full, otherwise 0 on success) [non blocking]
 int send_uart(uchar dat)
 {
-#ifdef inop
-      int res;
-
-      EA = 0;
-
-      if (tx_read == tx_write && tx_out > 0) {  // buffer is full
-            res = -1;
-      } else {
-            tx_buffer[tx_write] = dat;
-            tx_write = (tx_write+1)%MAX_BUFFER;
-            tx_out++;
-            res = 0;
-
-            if (TI == 0) TI = 1;                // instruct to run interrupt & send the data
-      }
-
-      EA = 1;
-      return res;
-#else
       while (serial_busy) __asm__ ("nop");
       serial_busy = 1;
       SBUF = dat;
       return 0;
-#endif
 }
 
 ///////////////////////////////////////////////////////////
@@ -660,10 +621,10 @@ void flash_e()
 
       send_str("\015\012EEPROM:");
 
-      for (i=0; i<512; i++) {
-            if (i%(8*4) == 0)
+      for (i=511; i>=0; i--) {
+            if ((i+1)%(8*4) == 0)
                   send_str("\015\012");
-            else if (i%4 == 0)
+            else if ((i+1)%4 == 0)
                   send_serial(' ');
             IAP_ADDRL = i;
             IAP_ADDRH = i >> 8;
@@ -690,12 +651,12 @@ void flash_e()
 // eeprom address dump
 void flash_a()
 {
-      int i;
+      short i;
 
       send_str("\015\012Address: ");
 
-      send_hex(((uchar *)(&ee_addr))[0]);
       send_hex(((uchar *)(&ee_addr))[1]);
+      send_hex(((uchar *)(&ee_addr))[0]);
 
       for (i=0; i<3*4; i+=4) {      // addr should range 2048, which is 3 nibbles
             type_number(ee_addr >> i, 0);
@@ -709,13 +670,13 @@ void flash_a()
 // ops timer snapshot dump
 void flash_o()
 {
-      int i;
+      short i;
       long disp;
 
       disp = ops_time_sec;          // snapshot, is under interrupt control
 
       send_str("\015\012Timer: ");
-      for (i=0; i<4; i++) send_hex(((uchar *)(&disp))[i]);
+      for (i=3; i>=0; i--) send_hex(((uchar *)(&disp))[i]);
 
       for (i=0; i<8*4; i+=4) {      // long is 4 bytes, 8 nibbles
             type_number(disp >> i, 0);
@@ -1342,7 +1303,6 @@ void main()
       sinter();
 
 	while (1) {
-#ifndef TIMERDEBUG
             // clear(0);
             /*play list*/
             //flash_1();
@@ -1380,8 +1340,7 @@ void main()
             flash_8();
             flash_9();
             flash_10();
-#endif INOP
-#endif TIMERDEBUG
+#endif
       }
 }
 
@@ -1427,17 +1386,11 @@ void print() __interrupt (3)
 void ops_time() __interrupt (1)
 {
       static int ticks=0, seconds=0;     // 2 Bytes
-#ifdef TIMERDEBUG
-      static uchar toggle=0;
-#endif
       static uchar layer=1;
 
       T0INIT;
       ticks++; 
       if (ticks >= 20) {      // One second
-#ifdef TIMERDEBUG
-            toggle = ~toggle;
-#endif
             ticks = 0;
             ops_time_sec++;
             seconds++;
@@ -1445,14 +1398,6 @@ void ops_time() __interrupt (1)
                   ops_time_write = 1;
                   seconds = 0;
             }
-#ifdef TIMERDEBUG
-            P1 = layer;
-            layer <<= 1:
-            if (layer == 0) layer++;
-            P2 = 1;  // latch enable: All latches
-            //P0 = (ticks & 0xff) >> 1;     // Shoud see a 10Hz counter
-            P0 = toggle;
-#endif
       }
 }
 
