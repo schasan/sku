@@ -45,12 +45,12 @@ void sinter()
 
       //P0M0 = 0xff;
       EA = 1;                 // General interrupt enable
-      // Timer 0: Uptime
+      // Timer 0: uptime
       IT0 = 1;                // TCON (Timer control): IT0 edge triggered
       TMOD |= T0_M0,          // 16bit timer
       T0INIT;
-      TR0 = 1;                // Timer 0 run enable
-      // Timer 1
+      TR0 = 1;                // Timer 0 run enable (Start after init)
+      // Timer 1: print
       ET1 = 1;                // Interrupt enable
       IT1 = 1;                // TCON (Timer control): IT1 edge triggered
       TMOD |= T1_M0;          // 16bit timer
@@ -154,13 +154,18 @@ void send_hex(uchar dat)
 void storetime()
 {
       uchar i;
+      long st;
+
+      ET0 = 0;                      // Atomic
+      st = ops_time_sec;
+      ET0 = 1;
 
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_PROGRAM;
       for (i=0; i<4; i++) {
             IAP_ADDRL = ee_addr;
             IAP_ADDRH = ee_addr >> 8;
-            IAP_DATA = ((uchar *)(&ops_time_sec))[i];
+            IAP_DATA = ((uchar *)(&st))[i];
             IAP_TRIG = 0x5a;
             IAP_TRIG = 0xa5;
             __asm__ ("nop");              // Hold here until operation conplete
@@ -219,7 +224,7 @@ void send_sector_status()
 {
       uchar i;
 
-      send_str("\015\012Sector status: ");
+      send_str("\015\012Sector status:\015\012");
       for (i=0; i<4; i++) {
             send_uart('0'+i);
             send_str(is_erased_sector(i) ? " clear\015\012" : " data\015\012");
@@ -701,7 +706,9 @@ void flash_o(uchar on_cube)
       short i;
       long disp;
 
+      ET0 = 0;                      // Atomic, as updated asynchronously
       disp = ops_time_sec;          // snapshot, is under interrupt control
+      ET0 = 1;
 
       send_str("\015\012Timer: ");
       for (i=3; i>=0; i--) send_hex(((uchar *)(&disp))[i]);
@@ -734,11 +741,16 @@ void flash_c()
 void flash_i()
 {
       uchar i, j;
+      long disp;
+
+      ET0 = 0;                      // Atomic
+      disp = ops_time_sec;
+      ET0 = 1;
 
       clear(0);
       for (i=0; i<200; i++) {
-            for (j=0; j<4; j++) type_number(ops_time_sec, j);
-            for (j=4; j<8; j++) type_number(ops_time_sec >> 4, j);
+            for (j=0; j<4; j++) type_number(disp, j);
+            for (j=4; j<8; j++) type_number(disp >> 4, j);
             delay(10000);
       }
       clear(0);
@@ -1346,7 +1358,7 @@ void main()
             flash_a(0);        // eeprom address display
             flash_o(0);        // Display snapshot of operating time
             if (ops_time_write) {   // Interrupt routing says we have to update ops time in eeprom
-                  send_str("EEPROM update\015\012");
+                  send_str("\015\012\033[1;31mEEPROM update\033[0m");
                   ops_time_write = 0;
                   storetime();
             }
