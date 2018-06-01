@@ -222,11 +222,12 @@ void send_sector_status()
 {
       uchar i;
 
-      send_str("\015\012Sector status:\015\012");
+      send_str("\015\012Sector status:\015\012\033[1;96m");
       for (i=0; i<4; i++) {
             send_uart('0'+i);
             send_str(is_erased_sector(i) ? " clear\015\012" : " data\015\012");
       }
+      send_str("\033[0m");
 }
 
 void delay5us(void)   // -0.026765046296us STC 1T 22.1184Mhz
@@ -649,7 +650,7 @@ void flash_e(uchar on_cube)
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_READ;
 
-      send_str("\015\012EEPROM:");
+      send_str("\015\012\033[1;31mEEPROM:\033[1;92m");
 
       for (i=(1024-1); i>=0; i--) {
             if ((i+1)%(8*4) == 0)
@@ -675,7 +676,7 @@ void flash_e(uchar on_cube)
       IAP_CONTR = 0;
       IAP_CMD = 0;
       IAP_TRIG = 0;
-      send_serial(' ');
+      send_str("\033[0m ");
 }
 
 // eeprom address dump
