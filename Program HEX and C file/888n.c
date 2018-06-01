@@ -171,8 +171,11 @@ void storetime()
       IAP_TRIG = 0;
 }
 
-void erase_sector(int addr)
+void erase_sector(uchar sector)
 {
+      int addr;
+
+      addr = sector*512;
       IAP_CONTR = ENABLE_IAP;
       IAP_CMD = CMD_ERASE;
       IAP_ADDRL = addr;
@@ -183,6 +186,44 @@ void erase_sector(int addr)
       IAP_CONTR = 0;
       IAP_CMD = 0;
       IAP_TRIG = 0;
+}
+
+uchar is_erased_sector(uchar sector)
+{
+      int i, addr;
+
+      IAP_CONTR = ENABLE_IAP;
+      IAP_CMD = CMD_READ;
+
+      addr = sector*512;
+      for (i=addr; i<addr+512; i++) {
+            IAP_ADDRL = i;
+            IAP_ADDRH = i >> 8;
+            IAP_TRIG = 0x5a;
+            IAP_TRIG = 0xa5;
+            __asm__ ("nop");              // Hold here until operation conplete
+            if (IAP_DATA != 0xff) {
+                  IAP_CONTR = 0;
+                  IAP_CMD = 0;
+                  IAP_TRIG = 0;
+                  return 0;
+            }
+      }
+      IAP_CONTR = 0;
+      IAP_CMD = 0;
+      IAP_TRIG = 0;
+      return 1;
+}
+
+void send_sector_status()
+{
+      uchar i;
+
+      send_str("\015\012Sector status: ");
+      for (i=0; i<4; i++) {
+            send_uart('0'+i);
+            send_str(is_erased_sector(i) ? " clear\015\012" : " data\015\012");
+      }
 }
 
 void delay5us(void)   // -0.026765046296us STC 1T 22.1184Mhz
@@ -1298,6 +1339,7 @@ void main()
 
             clear(0);
             send_str("\015\012Hello Mario\015\012");
+            send_sector_status();
             //flash_n();      // Counter
             //flash_i();      // Interrupt live time display
             flash_e(0);        // eeprom dumper
