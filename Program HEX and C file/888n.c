@@ -23,13 +23,11 @@
 __xdata volatile uchar tx[RB];
 __xdata volatile uchar tx_act=0, tx_ptr_w=0, tx_ptr_r=0;
 #endif
-__xdata volatile uchar display[8][8];
 __xdata volatile unsigned long ops_time_sec = 0L;     // ticking in seconds, ~=136 years
 __xdata volatile int ee_addr = 0;                     // pointer in eeprom to store uptime
 __bit ops_time_write = 0;                             // signal from interrupt to write ops time
 __bit serial_busy = 0;
-
-
+__xdata volatile uchar display[8][8];                 // WARNING: side effects through out of bounds array!
 
 // T0 timer with same (invalid due to 13 bits) parameters may have been 8,192ms before
 #define T0INIT    TH0 = 0x3c; TL0 = 0xb0  // 65.536-50.000 = 15.536 = 50ms
@@ -78,7 +76,7 @@ void sinter()
                   IAP_TRIG = 0x5a;
                   IAP_TRIG = 0xa5;
                   __asm__ ("nop");              // Hold here until operation conplete
-                  ((uchar *)(&ee_time))[i] = IAP_DATA;
+                  *(((uchar *)(&ee_time))+i) = IAP_DATA;
             }
             if (ee_time == 0xffffffff)  {       // Current address has an empty record
                   IAP_CONTR = 0;
@@ -297,7 +295,7 @@ void clear(char le)
 {
       uchar i, j;
 
-      for (j=0; j<8; j++) for (i=0; i<8; i++) display[j][i] = le;
+      for (j=0; j<8; j++) for (i=0; i<8; i++) display[j&0x7][i&0x7] = le;
 }
 
 void trailler(uint speed)
@@ -306,10 +304,10 @@ void trailler(uint speed)
 
       for (i=6; i>=-3; i--) {
             if (i >= 0) {
-                  for (j=0;j<8;j++) display[j][i] = display[j][i+1];
+                  for (j=0;j<8;j++) display[j&0x7][i&0x7] = display[j&0x7][(i+1)&0x7];
             }
 
-            if (i<4) for (j=0;j<8;j++) display[j][i+4]=0;
+            if (i<4) for (j=0;j<8;j++) display[j&0x7][(i+4)&0x7]=0;
 
             delay(speed);
 
@@ -324,9 +322,9 @@ void point(uchar x, uchar y, uchar z, uchar le)
       ch0=~ch1;
 
       if (le) 
-            display[z][y]=display[z][y]|ch1;
+            display[z&0x7][y&0x7] = display[z&0x7][y&0x7] | ch1;
       else 
-            display[z][y]=display[z][y]&ch0;
+            display[z&0x7][y&0x7] = display[z&0x7][y&0x7] & ch0;
 }
 
 void type(uchar cha, uchar y)
@@ -334,7 +332,7 @@ void type(uchar cha, uchar y)
 
       uchar xx;
 
-      for (xx=0; xx<8; xx++) display[xx][y]=table_cha[cha][xx];
+      for (xx=0; xx<8; xx++) display[xx&0x7][y&0x7] = table_cha[cha][xx];
 }
 
 void type_number(uchar cha, uchar y)
@@ -343,7 +341,7 @@ void type_number(uchar cha, uchar y)
 
       //cha %= 10;  // prevent index out of bounds
       cha &= 0xf;  // prevent index out of bounds
-      for (xx=0; xx<8; xx++) display[xx][y] = table_hex_number[cha][xx];
+      for (xx=0; xx<8; xx++) display[xx&0x7][y&0x7] = table_hex_number[cha][xx];
 }
 
 /*The first variable is the distance from the midpoint.
@@ -410,38 +408,38 @@ void box(uchar x1, uchar y1, uchar z1, uchar x2, uchar y2, uchar z2, uchar fill,
       if (fill) {
             if (le) {
                   for (i=z1;i<=z2;i++)
-                        for (j=y1;j<=y2;j++) display[j][i] |= t;
+                        for (j=y1;j<=y2;j++) display[j&0x7][i&0x7] |= t;
             } else {
                   for (i=z1;i<=z2;i++)
-                        for (j=y1;j<=y2;j++) display[j][i] &= t;
+                        for (j=y1;j<=y2;j++) display[j&0x7][i&0x7] &= t;
             }
       } else {
             if (le) {
-                  display[y1][z1]|=t;
-                  display[y2][z1]|=t;
-                  display[y1][z2]|=t;
-                  display[y2][z2]|=t;
+                  display[y1&0x7][z1&0x7] |= t;
+                  display[y2&0x7][z1&0x7] |= t;
+                  display[y1&0x7][z2&0x7] |= t;
+                  display[y2&0x7][z2&0x7] |= t;
             } else {
-                  display[y1][z1]&=t;
-                  display[y2][z1]&=t;
-                  display[y1][z2]&=t;
-                  display[y2][z2]&=t;
+                  display[y1&0x7][z1&0x7] &= t;
+                  display[y2&0x7][z1&0x7] &= t;
+                  display[y1&0x7][z2&0x7] &= t;
+                  display[y2&0x7][z2&0x7] &= t;
             }
             t=(0x01<<x1)|(0x01<<x2);
             if (!le) t = ~t;
             if (le) {
                   for (j=z1;j<=z2;j+=(z2-z1)) {
-                        for (i=y1;i<=y2;i++) display[i][j]|=t;
+                        for (i=y1;i<=y2;i++) display[i&0x7][j&0x7] |= t;
                   }
                   for (j=y1;j<=y2;j+=(y2-y1)) {
-                        for (i=z1;i<=z2;i++) display[j][i]|=t;
+                        for (i=z1;i<=z2;i++) display[j&0x7][i&0x7] |= t;
                   }
             } else {
                   for (j=z1;j<=z2;j+=(z2-z1)) {
-                        for (i=y1;i<=y2;i++) display[i][j]&=t;
+                        for (i=y1;i<=y2;i++) display[i&0x7][j&0x7] &= t;
                   }
                   for (j=y1;j<=y2;j+=(y2-y1)) {
-                        for (i=z1;i<=z2;i++) display[j][i]&=t;
+                        for (i=z1;i<=z2;i++) display[j&0x7][i&0x7] &= t;
                   }
             }
       }
@@ -498,29 +496,29 @@ void roll_apeak_yz(uchar n,uint speed)
       switch(n) {
             case 1:
                   for (i=0;i<7;i++) {
-                        display[i][7]=0;
-                        display[7][6-i]=255;
+                        display[i&0x7][7&0x7] = 0;
+                        display[7&0x7][(6-i)&0x7] = 255;
                         delay(speed);
                   }
                   break;
             case 2:
                   for (i=0;i<7;i++) {
-                        display[7][7-i]=0;
-                        display[6-i][0]=255;
+                        display[7&0x7][(7-i)&0x7] = 0;
+                        display[(6-i)&0x7][0&0x7] = 255;
                         delay(speed);
                   }
                   break;
             case 3:
                   for (i=0;i<7;i++) {
-                        display[7-i][0]=0;
-                        display[0][i+1]=255;
+                        display[(7-i)&0x7][0&0x7] = 0;
+                        display[0&0x7][(i+1)&0x7] = 255;
                         delay(speed);
                   }
                   break;
             case 0:
                   for (i=0;i<7;i++) {
-                        display[0][i]=0;
-                        display[i+1][7]=255;
+                        display[0&0x7][i&0x7] = 0;
+                        display[(i+1)&0x7][7&0x7] = 255;
                         delay(speed);
                   }
                   break;
@@ -611,7 +609,7 @@ void trans(uchar z, uint speed)
 
       for (j=0; j<8; j++) {
             for (i=0;i<8;i++)
-                  display[z][i]>>=1;
+                  display[z&0x7][i&0x7] >>= 1;
             delay(speed);
       }
 }
@@ -628,8 +626,8 @@ void tranoutchar(uchar c, uint speed)
             for (j=0; j <= i; j++)
                   a |= (1<<j);
             for (k=0;k<8;k++) {
-                  display[k][3]|=table_cha[c][k]&a;
-                  display[k][4]|=table_cha[c][k]&a;
+                  display[k&0x7][3&0x7] |= table_cha[c][k]&a;
+                  display[k&0x7][4&0x7] |= table_cha[c][k]&a;
             }
             delay(speed);
       }
@@ -640,7 +638,7 @@ void transss()
       uchar i,j;
 
       for (i=0;i<8;i++) 
-            for (j=0;j<8;j++) display[i][j]<<=1;
+            for (j=0;j<8;j++) display[i&0x7][j&0x7] <<= 1;
 }
 
 // eeprom dumper
@@ -1401,7 +1399,7 @@ void print() __interrupt (3)
       for (i=0; i<8; i++) {
             P2=1<<i;
             delay(3);
-            P0=display[layer][i];
+            P0=display[layer&0x7][i&0x7];
             delay(3);
       }
 
